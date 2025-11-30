@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bluesky Media Stats</title>
+
   <style>
     body {
       display: flex;
@@ -23,7 +24,7 @@
       padding: 30px 25px;
       text-align: center;
       width: 90%;
-      max-width: 380px;
+      max-width: 430px;
       box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
       position: relative;
     }
@@ -68,11 +69,25 @@
       padding: 15px;
     }
 
-    .stat-item {
+    .section-title {
+      font-size: 1.2rem;
+      margin-top: 15px;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: #d8ecff;
+    }
+
+    .rank-line {
+      font-size: 1rem;
+      margin: 5px 0;
       display: flex;
       justify-content: space-between;
-      margin: 8px 0;
-      font-size: 1.1rem;
+    }
+
+    .rank-line a {
+      color: #fff;
+      text-decoration: underline;
+      margin-left: 6px;
     }
 
     .handle {
@@ -98,6 +113,30 @@
       transition: width 0.3s;
     }
 
+    #progressNote {
+      font-size: 0.85rem;
+      color: #e8f4ff;
+      margin-top: 10px;
+      display: none;
+      text-align: center;
+    }
+	  
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 3px solid rgba(255, 255, 255, 0.4);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none;
+      margin: 8px auto 0;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
     #downloadBtn {
       display: none;
       margin-top: 20px;
@@ -110,9 +149,12 @@
     }
   </style>
 </head>
+
 <body>
+
   <div class="card" id="card">
-    <h1>Bluesky Media Stats</h1>
+
+    <h1>Bluesky Media Stats v1.1</h1>
 
     <input type="text" id="handleInput" placeholder="Enter handle (e.g. @fralexander.bsky.social)">
     <button onclick="generateStats()">Generate Stats</button>
@@ -121,17 +163,26 @@
       <div class="progress-bar" id="progressBar"></div>
     </div>
 
+    <div id="progressNote">Compilation ended. Calculating... Please wait.</div>
+    <div id="progressSpinner" class="spinner"></div>
+
     <div id="statsContainer" class="stats" style="display: none;">
       <div class="handle" id="handleDisplay"></div>
 
-      <div class="stat-item"><span>Total media posted:</span><span id="mediaCount">-</span></div>
-      <div class="stat-item"><span>Average likes:</span><span id="avgLikes">-</span></div>
-      <div class="stat-item"><span>Average reposts:</span><span id="avgReposts">-</span></div>
-      <div class="stat-item"><span>Average comments:</span><span id="avgComments">-</span></div>
+      <div class="section-title">General Stats</div>
+      <div class="rank-line"><span>Total media posted:</span><span id="mediaCount">-</span></div>
+      <div class="rank-line"><span>Average likes:</span><span id="avgLikes">-</span></div>
+      <div class="rank-line"><span>Average reposts:</span><span id="avgReposts">-</span></div>
+      <div class="rank-line"><span>Average comments:</span><span id="avgComments">-</span></div>
 
-      <div class="stat-item"><span>Most liked media:</span><span id="maxLikes">-</span></div>
-      <div class="stat-item"><span>Most reposted media:</span><span id="maxReposts">-</span></div>
-      <div class="stat-item"><span>Most commented media:</span><span id="maxComments">-</span></div>
+      <div class="section-title">Most Liked Posts</div>
+      <div id="topLikes"></div>
+
+      <div class="section-title">Most Reposted Posts</div>
+      <div id="topReposts"></div>
+
+      <div class="section-title">Most Commented Posts</div>
+      <div id="topComments"></div>
     </div>
 
     <button id="downloadBtn" onclick="downloadCard()">Download Image Card</button>
@@ -141,7 +192,6 @@
 
   <script>
 
- 
     function hasAnyMedia(embed) {
       if (!embed) return false;
       const type = embed["$type"];
@@ -162,9 +212,11 @@
       return false;
     }
 
-
     async function fetchStats(handle, onProgress) {
-      const resolveUrl = `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle.replace('@', ''))}`;
+
+      const resolveUrl =
+        `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle.replace('@', ''))}`;
+
       const resolveResp = await fetch(resolveUrl);
       if (!resolveResp.ok) throw new Error('Could not resolve handle');
 
@@ -193,65 +245,100 @@
 
       } while (cursor);
 
-
       const mediaPosts = allPosts.filter(entry => {
-        const post = entry.post;
-        if (!post) return false;
+        const p = entry.post;
+        if (!p) return false;
         if (entry.reason?.$type === "app.bsky.feed.defs#reasonRepost") return false;
-        if (post.record?.reply) return false;
-        return hasAnyMedia(post.embed);
+        if (p.record?.reply) return false;
+        return hasAnyMedia(p.embed);
       });
 
-
-      /* Stats */
-      let sumLikes = 0, sumReposts = 0, sumComments = 0;
-      let maxLikes = 0, maxReposts = 0, maxComments = 0;
-
-      mediaPosts.forEach(entry => {
+     
+      const detailed = mediaPosts.map(entry => {
         const p = entry.post;
 
-			const likes = p.likeCount ?? 0;
-			const reposts = (p.repostCount ?? 0) + (p.quoteCount ?? 0);
-			const comments = p.replyCount ?? 0;
-
-        sumLikes += likes;
-        sumReposts += reposts;
-        sumComments += comments;
-
-        if (likes > maxLikes) maxLikes = likes;
-        if (reposts > maxReposts) maxReposts = reposts;
-        if (comments > maxComments) maxComments = comments;
+        return {
+          likes: p.likeCount ?? 0,
+          reposts: (p.repostCount ?? 0) + (p.quoteCount ?? 0),
+          comments: p.replyCount ?? 0,
+          uri: p.uri,
+        };
       });
 
+     
+      const topLikes = [...detailed].sort((a, b) => b.likes - a.likes).slice(0, 3);
+      const topReposts = [...detailed].sort((a, b) => b.reposts - a.reposts).slice(0, 3);
+      const topComments = [...detailed].sort((a, b) => b.comments - a.comments).slice(0, 3);
+
+     
+      const totalMedia = mediaPosts.length;
+      const sum = detailed.reduce(
+        (acc, p) => {
+          acc.likes += p.likes;
+          acc.reposts += p.reposts;
+          acc.comments += p.comments;
+          return acc;
+        },
+        { likes: 0, reposts: 0, comments: 0 }
+      );
+
       return {
-        totalMedia: mediaPosts.length,
-        avgLikes: mediaPosts.length ? (sumLikes / mediaPosts.length).toFixed(1) : 0,
-        avgReposts: mediaPosts.length ? (sumReposts / mediaPosts.length).toFixed(1) : 0,
-        avgComments: mediaPosts.length ? (sumComments / mediaPosts.length).toFixed(1) : 0,
-        maxLikes,
-        maxReposts,
-        maxComments
+        totalMedia,
+        avgLikes: totalMedia ? (sum.likes / totalMedia).toFixed(1) : 0,
+        avgReposts: totalMedia ? (sum.reposts / totalMedia).toFixed(1) : 0,
+        avgComments: totalMedia ? (sum.comments / totalMedia).toFixed(1) : 0,
+        topLikes,
+        topReposts,
+        topComments
       };
     }
 
+    function renderTopList(containerId, list, typeLabel) {
+      const el = document.getElementById(containerId);
+      el.innerHTML = "";
+
+      list.forEach((item, index) => {
+        const link = `https://bsky.app/profile/${item.uri.split("/")[2]}/post/${item.uri.split("/").pop()}`;
+        el.innerHTML += `
+          <div class="rank-line">
+            <span>#${index + 1}: ${item[typeLabel]} ${typeLabel}</span>
+            <a href="${link}" target="_blank">Open</a>
+          </div>
+        `;
+      });
+    }
 
     async function generateStats() {
+
       const handle = document.getElementById('handleInput').value.trim();
-      if (!handle) return alert('Please enter a handle');
+      if (!handle) return alert("Please enter a handle");
 
       const progressContainer = document.getElementById('progressContainer');
       const progressBar = document.getElementById('progressBar');
+      const progressNote = document.getElementById('progressNote');
+      const progressSpinner = document.getElementById('progressSpinner');
+
       const statsContainer = document.getElementById('statsContainer');
       const downloadBtn = document.getElementById('downloadBtn');
 
-      progressContainer.style.display = 'block';
-      progressBar.style.width = '0%';
-      statsContainer.style.display = 'none';
-      downloadBtn.style.display = 'none';
+      progressContainer.style.display = "block";
+      progressBar.style.width = "0%";
+      progressNote.style.display = "none";
+      progressSpinner.style.display = "none";
+
+      statsContainer.style.display = "none";
+      downloadBtn.style.display = "none";
 
       try {
+
         const stats = await fetchStats(handle, page => {
-          progressBar.style.width = Math.min(100, page * 5) + '%';
+          const percent = Math.min(100, page * 5);
+          progressBar.style.width = percent + "%";
+
+          if (percent === 100) {
+            progressNote.style.display = "block";
+            progressSpinner.style.display = "block";
+          }
         });
 
         document.getElementById('handleDisplay').textContent = handle;
@@ -261,26 +348,33 @@
         document.getElementById('avgReposts').textContent = stats.avgReposts;
         document.getElementById('avgComments').textContent = stats.avgComments;
 
-        document.getElementById('maxLikes').textContent = stats.maxLikes;
-        document.getElementById('maxReposts').textContent = stats.maxReposts;
-        document.getElementById('maxComments').textContent = stats.maxComments;
+        renderTopList("topLikes", stats.topLikes, "likes");
+        renderTopList("topReposts", stats.topReposts, "reposts");
+        renderTopList("topComments", stats.topComments, "comments");
 
-        statsContainer.style.display = 'block';
-        downloadBtn.style.display = 'block';
+        statsContainer.style.display = "block";
+        downloadBtn.style.display = "block";
 
       } catch (err) {
         alert("Error: " + err.message);
+
       } finally {
+
         progressBar.style.width = "100%";
-        setTimeout(() => progressContainer.style.display = "none", 900);
+        progressNote.style.display = "block";
+        progressSpinner.style.display = "block";
+
+        setTimeout(() => {
+          progressContainer.style.display = "none";
+          progressNote.style.display = "none";
+          progressSpinner.style.display = "none";
+        }, 900);
       }
     }
 
-
     function downloadCard() {
       const card = document.getElementById('card');
-      html2canvas(card, { backgroundColor: '#0077ff', scale: 2 })
-      .then(canvas => {
+      html2canvas(card, { backgroundColor: '#0077ff', scale: 2 }).then(canvas => {
         const link = document.createElement('a');
         link.download = 'bluesky_stats.png';
         link.href = canvas.toDataURL('image/png');
@@ -289,5 +383,6 @@
     }
 
   </script>
+
 </body>
 </html>
