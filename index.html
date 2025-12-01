@@ -107,10 +107,16 @@
     }
 
     .progress-bar {
-      width: 0%;
+      width: 100%;
       height: 100%;
       background: #fff;
-      transition: width 0.3s;
+      animation: pulse 1.2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { transform: translateX(-100%); }
+      50% { transform: translateX(100%); }
+      100% { transform: translateX(-100%); }
     }
 
     #progressNote {
@@ -119,22 +125,6 @@
       margin-top: 10px;
       display: none;
       text-align: center;
-    }
-	  
-    .spinner {
-      width: 18px;
-      height: 18px;
-      border: 3px solid rgba(255, 255, 255, 0.4);
-      border-top-color: white;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      display: none;
-      margin: 8px auto 0;
-    }
-
-    @keyframes spin {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
     }
 
     #downloadBtn {
@@ -147,24 +137,29 @@
     #downloadBtn:hover {
       background: #cce6ff;
     }
+
+    #timerDisplay {
+      margin-top: 10px;
+      font-size: 0.9rem;
+      color: #e8f4ff;
+      display: none;
+      text-align: center;
+    }
   </style>
 </head>
-
 <body>
 
   <div class="card" id="card">
 
-    <h1>Bluesky Media Stats v1.1</h1>
+    <h1>Bluesky Media Stats v1.2</h1>
 
     <input type="text" id="handleInput" placeholder="Enter handle (e.g. @fralexander.bsky.social)">
     <button onclick="generateStats()">Generate Stats</button>
 
     <div class="progress-container" id="progressContainer">
-      <div class="progress-bar" id="progressBar"></div>
+      <div class="progress-bar"></div>
     </div>
-
-    <div id="progressNote">Compilation ended. Calculating... Please wait.</div>
-    <div id="progressSpinner" class="spinner"></div>
+    <div id="progressNote">Processing all media posts, please wait...</div>
 
     <div id="statsContainer" class="stats" style="display: none;">
       <div class="handle" id="handleDisplay"></div>
@@ -186,203 +181,173 @@
     </div>
 
     <button id="downloadBtn" onclick="downloadCard()">Download Image Card</button>
+    <div id="timerDisplay"></div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script>
 
-  <script>
+function hasAnyMedia(embed) {
+  if (!embed) return false;
+  const type = embed["$type"];
 
-    function hasAnyMedia(embed) {
-      if (!embed) return false;
-      const type = embed["$type"];
 
-      if (type === "app.bsky.embed.images#view") return true;
-      if (type === "app.bsky.embed.video#view") return true;
-      if (type === "app.bsky.embed.external#view" && embed.external?.thumb) return true;
+  if (type === "app.bsky.embed.images#view" || type === "app.bsky.embed.video#view") return true;
 
-      if (type === "app.bsky.embed.recordWithMedia#view") {
-        return hasAnyMedia(embed.media) || hasAnyMedia(embed.record?.embeds?.[0]);
-      }
 
-      if (type === "app.bsky.embed.record#view") {
-        const quoted = embed.record?.value?.embed;
-        return quoted ? hasAnyMedia(quoted) : false;
-      }
+  if (type === "app.bsky.embed.external#view" && embed.external?.thumb) return true;
 
-      return false;
-    }
 
-    async function fetchStats(handle, onProgress) {
+  if (type === "app.bsky.embed.recordWithMedia#view") {
 
-      const resolveUrl =
-        `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle.replace('@', ''))}`;
+    return hasAnyMedia(embed.media) || hasAnyMedia(embed.record?.embeds?.[0]);
+  }
 
-      const resolveResp = await fetch(resolveUrl);
-      if (!resolveResp.ok) throw new Error('Could not resolve handle');
 
-      const { did } = await resolveResp.json();
+  if (type === "app.bsky.embed.record#view") {
+    const quoted = embed.record?.value?.embed;
+    return quoted ? hasAnyMedia(quoted) : false;
+  }
 
-      let cursor = null;
-      let allPosts = [];
-      let page = 0;
+  return false;
+}
 
-      do {
-        const url = new URL('https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed');
-        url.searchParams.set('actor', did);
-        url.searchParams.set('limit', '100');
-        if (cursor) url.searchParams.set('cursor', cursor);
+function renderTopList(containerId, list, typeLabel){
+  const el=document.getElementById(containerId);
 
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error('Could not fetch feed');
+  const sortedList = list.sort((a, b) => b[typeLabel] - a[typeLabel]).slice(0, 3);
+  
+  let html = '';
+  sortedList.forEach((item,index)=>{
+    const link=`https://bsky.app/profile/${item.uri.split("/")[2]}/post/${item.uri.split("/").pop()}`;
+    html += `
+      <div class="rank-line">
+        <span>#${index+1}: ${item[typeLabel]} ${typeLabel}</span>
+        <a href="${link}" target="_blank">Open</a>
+      </div>
+    `;
+  });
+  el.innerHTML = html;
+}
 
-        const json = await resp.json();
-        if (!json.feed || json.feed.length === 0) break;
 
-        allPosts.push(...json.feed);
-        cursor = json.cursor;
+async function generateStats() {
+  const handle = document.getElementById('handleInput').value.trim();
+  if (!handle) return alert("Please enter a handle");
 
-        onProgress?.(++page);
+  const progressContainer = document.getElementById('progressContainer');
+  const progressNote = document.getElementById('progressNote');
+  const statsContainer = document.getElementById('statsContainer');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const timerDisplay = document.getElementById('timerDisplay');
+  
+  progressContainer.style.display = "block";
+  progressNote.style.display = "block";
+  statsContainer.style.display = "none";
+  downloadBtn.style.display = "none";
+  timerDisplay.style.display = "none";
 
-      } while (cursor);
+  const startTime = performance.now();
 
-      const mediaPosts = allPosts.filter(entry => {
+  try {
+    const resolveResp = await fetch(`https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle.replace('@', ''))}`);
+    if (!resolveResp.ok) throw new Error('Could not resolve handle');
+    const { did } = await resolveResp.json();
+
+    let cursor = null;
+    let totalMedia = 0, sumLikes = 0, sumReposts = 0, sumComments = 0;
+    let allMediaPosts = []; 
+    
+    const postsPerPage = 100;
+    
+
+    while (true) {
+      const url = new URL('https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed');
+      url.searchParams.set('actor', did);
+      url.searchParams.set('limit', postsPerPage.toString());
+      if (cursor) url.searchParams.set('cursor', cursor);
+
+
+      const resp = await fetch(url); 
+      if (!resp.ok) break;
+      const json = await resp.json();
+      if (!json.feed || json.feed.length === 0) break;
+      
+
+      json.feed.forEach(entry => {
         const p = entry.post;
-        if (!p) return false;
-        if (entry.reason?.$type === "app.bsky.feed.defs#reasonRepost") return false;
-        if (p.record?.reply) return false;
-        return hasAnyMedia(p.embed);
+        if (!p || entry.reason?.$type === "app.bsky.feed.defs#reasonRepost" || p.record?.reply) return;
+        if (!hasAnyMedia(p.embed)) return;
+
+        const likes = p.likeCount ?? 0;
+        const reposts = (p.repostCount ?? 0) + (p.quoteCount ?? 0); 
+        const comments = p.replyCount ?? 0;
+        const uri = p.uri;
+
+        totalMedia++;
+        sumLikes += likes;
+        sumReposts += reposts;
+        sumComments += comments;
+
+        allMediaPosts.push({ likes, reposts, comments, uri }); 
       });
 
-     
-      const detailed = mediaPosts.map(entry => {
-        const p = entry.post;
 
-        return {
-          likes: p.likeCount ?? 0,
-          reposts: (p.repostCount ?? 0) + (p.quoteCount ?? 0),
-          comments: p.replyCount ?? 0,
-          uri: p.uri,
-        };
-      });
+      progressNote.textContent = `Processing media posts: ${totalMedia} processed...`;
 
-     
-      const topLikes = [...detailed].sort((a, b) => b.likes - a.likes).slice(0, 3);
-      const topReposts = [...detailed].sort((a, b) => b.reposts - a.reposts).slice(0, 3);
-      const topComments = [...detailed].sort((a, b) => b.comments - a.comments).slice(0, 3);
-
-     
-      const totalMedia = mediaPosts.length;
-      const sum = detailed.reduce(
-        (acc, p) => {
-          acc.likes += p.likes;
-          acc.reposts += p.reposts;
-          acc.comments += p.comments;
-          return acc;
-        },
-        { likes: 0, reposts: 0, comments: 0 }
-      );
-
-      return {
-        totalMedia,
-        avgLikes: totalMedia ? (sum.likes / totalMedia).toFixed(1) : 0,
-        avgReposts: totalMedia ? (sum.reposts / totalMedia).toFixed(1) : 0,
-        avgComments: totalMedia ? (sum.comments / totalMedia).toFixed(1) : 0,
-        topLikes,
-        topReposts,
-        topComments
-      };
+      if (!json.cursor) break;
+      cursor = json.cursor;
+      
+    
     }
 
-    function renderTopList(containerId, list, typeLabel) {
-      const el = document.getElementById(containerId);
-      el.innerHTML = "";
 
-      list.forEach((item, index) => {
-        const link = `https://bsky.app/profile/${item.uri.split("/")[2]}/post/${item.uri.split("/").pop()}`;
-        el.innerHTML += `
-          <div class="rank-line">
-            <span>#${index + 1}: ${item[typeLabel]} ${typeLabel}</span>
-            <a href="${link}" target="_blank">Open</a>
-          </div>
-        `;
-      });
-    }
+    const topLikes = [...allMediaPosts].sort((a, b) => b.likes - a.likes).slice(0, 3);
+    const topReposts = [...allMediaPosts].sort((a, b) => b.reposts - a.reposts).slice(0, 3);
+    const topComments = [...allMediaPosts].sort((a, b) => b.comments - a.comments).slice(0, 3);
 
-    async function generateStats() {
+    const endTime = performance.now();
+    const processingTime = ((endTime - startTime) / 1000).toFixed(2);
+    
 
-      const handle = document.getElementById('handleInput').value.trim();
-      if (!handle) return alert("Please enter a handle");
+    progressNote.textContent = `Processing completed: ${totalMedia} media posts processed`;
 
-      const progressContainer = document.getElementById('progressContainer');
-      const progressBar = document.getElementById('progressBar');
-      const progressNote = document.getElementById('progressNote');
-      const progressSpinner = document.getElementById('progressSpinner');
+    document.getElementById('handleDisplay').textContent = handle;
+    document.getElementById('mediaCount').textContent = totalMedia;
+    document.getElementById('avgLikes').textContent = totalMedia ? (sumLikes / totalMedia).toFixed(1) : 0;
+    document.getElementById('avgReposts').textContent = totalMedia ? (sumReposts / totalMedia).toFixed(1) : 0;
+    document.getElementById('avgComments').textContent = totalMedia ? (sumComments / totalMedia).toFixed(1) : 0;
 
-      const statsContainer = document.getElementById('statsContainer');
-      const downloadBtn = document.getElementById('downloadBtn');
+    renderTopList("topLikes", topLikes, "likes");
+    renderTopList("topReposts", topReposts, "reposts");
+    renderTopList("topComments", topComments, "comments");
 
-      progressContainer.style.display = "block";
-      progressBar.style.width = "0%";
-      progressNote.style.display = "none";
-      progressSpinner.style.display = "none";
+    statsContainer.style.display = "block";
+    downloadBtn.style.display = "block";
+    progressContainer.style.display = "none";
+    progressNote.style.display = "none";
 
-      statsContainer.style.display = "none";
-      downloadBtn.style.display = "none";
+    timerDisplay.textContent = `Processing time: ${processingTime} seconds`;
+    timerDisplay.style.display = "block";
 
-      try {
+  } catch (err) {
+    alert("Error: " + err.message);
+    progressContainer.style.display = "none";
+    progressNote.style.display = "none";
+  }
+}
 
-        const stats = await fetchStats(handle, page => {
-          const percent = Math.min(100, page * 5);
-          progressBar.style.width = percent + "%";
+function downloadCard(){
+  const card=document.getElementById('card');
 
-          if (percent === 100) {
-            progressNote.style.display = "block";
-            progressSpinner.style.display = "block";
-          }
-        });
-
-        document.getElementById('handleDisplay').textContent = handle;
-
-        document.getElementById('mediaCount').textContent = stats.totalMedia;
-        document.getElementById('avgLikes').textContent = stats.avgLikes;
-        document.getElementById('avgReposts').textContent = stats.avgReposts;
-        document.getElementById('avgComments').textContent = stats.avgComments;
-
-        renderTopList("topLikes", stats.topLikes, "likes");
-        renderTopList("topReposts", stats.topReposts, "reposts");
-        renderTopList("topComments", stats.topComments, "comments");
-
-        statsContainer.style.display = "block";
-        downloadBtn.style.display = "block";
-
-      } catch (err) {
-        alert("Error: " + err.message);
-
-      } finally {
-
-        progressBar.style.width = "100%";
-        progressNote.style.display = "block";
-        progressSpinner.style.display = "block";
-
-        setTimeout(() => {
-          progressContainer.style.display = "none";
-          progressNote.style.display = "none";
-          progressSpinner.style.display = "none";
-        }, 900);
-      }
-    }
-
-    function downloadCard() {
-      const card = document.getElementById('card');
-      html2canvas(card, { backgroundColor: '#0077ff', scale: 2 }).then(canvas => {
-        const link = document.createElement('a');
-        link.download = 'bluesky_stats.png';
-        link.href = canvas.toDataURL('image/png');
-        link.click();
-      });
-    }
-
-  </script>
+  html2canvas(card,{backgroundColor:'#0077ff',scale:2}).then(canvas=>{
+    const link=document.createElement('a');
+    link.download='bluesky_stats.png';
+    link.href=canvas.toDataURL('image/png');
+    link.click();
+  });
+}
+</script>
 
 </body>
 </html>
