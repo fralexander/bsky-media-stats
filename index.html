@@ -193,13 +193,18 @@ function hasAnyMedia(embed) {
   if (!embed) return false;
   const type = embed["$type"];
 
+
   if (type === "app.bsky.embed.images#view" || type === "app.bsky.embed.video#view") return true;
+
 
   if (type === "app.bsky.embed.external#view" && embed.external?.thumb) return true;
 
+
   if (type === "app.bsky.embed.recordWithMedia#view") {
+
     return hasAnyMedia(embed.media) || hasAnyMedia(embed.record?.embeds?.[0]);
   }
+
 
   if (type === "app.bsky.embed.record#view") {
     const quoted = embed.record?.value?.embed;
@@ -213,7 +218,7 @@ function renderTopList(containerId, list, typeLabel){
   const el=document.getElementById(containerId);
 
   const sortedList = list.sort((a, b) => b[typeLabel] - a[typeLabel]).slice(0, 3);
-  
+
   let html = '';
   sortedList.forEach((item,index)=>{
     const link=`https://bsky.app/profile/${item.uri.split("/")[2]}/post/${item.uri.split("/").pop()}`;
@@ -258,7 +263,7 @@ async function generateStats() {
   const statsContainer = document.getElementById('statsContainer');
   const downloadBtn = document.getElementById('downloadBtn');
   const timerDisplay = document.getElementById('timerDisplay');
-  
+
   progressContainer.style.display = "block";
   progressNote.style.display = "block";
   statsContainer.style.display = "none";
@@ -272,7 +277,17 @@ async function generateStats() {
     if (!resolveResp.ok) throw new Error('Could not resolve handle');
     const { did } = await resolveResp.json();
 
-    let cursor = null;
+const profileResp = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=${did}`);
+let accountCreationDate = null;
+if (profileResp.ok) {
+    const profileData = await profileResp.json();
+    if (profileData.createdAt) {
+        accountCreationDate = new Date(profileData.createdAt);
+    }
+}
+
+let cursor = null;
+
     let totalMedia = 0, sumLikes = 0, sumReposts = 0, sumComments = 0;
     let allMediaPosts = [];
     
@@ -281,20 +296,23 @@ async function generateStats() {
     const engagementByDay = {
         0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0
     };
-    
+
     const postsPerPage = 100;
-    
+
+
     while (true) {
       const url = new URL('https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed');
       url.searchParams.set('actor', did);
       url.searchParams.set('limit', postsPerPage.toString());
       if (cursor) url.searchParams.set('cursor', cursor);
 
+
       const resp = await fetch(url); 
       if (!resp.ok) break;
       const json = await resp.json();
       if (!json.feed || json.feed.length === 0) break;
-      
+
+
       json.feed.forEach(entry => {
         const p = entry.post;
         if (!p || entry.reason?.$type === "app.bsky.feed.defs#reasonRepost" || p.record?.reply) return;
@@ -331,20 +349,23 @@ async function generateStats() {
         allMediaPosts.push({ likes, reposts, comments, uri }); 
       });
 
+
       progressNote.textContent = `Processing media posts: ${totalMedia} processed...`;
 
       if (!json.cursor) break;
       cursor = json.cursor;
+      
     }
 
-    
 
-    let accountAgeString = 'N/A';
-    if (firstPostDate) {
-        accountAgeString = getAge(firstPostDate, new Date());
-    }
 
-    
+let accountAgeString = 'N/A';
+const referenceDate = accountCreationDate || firstPostDate;
+
+if (referenceDate) {
+    accountAgeString = getAge(referenceDate, new Date());
+}
+
     let maxEngagement = -1;
     let peakDayIndex = -1;
     for (const day in engagementByDay) {
@@ -363,7 +384,8 @@ async function generateStats() {
 
     const endTime = performance.now();
     const processingTime = ((endTime - startTime) / 1000).toFixed(2);
-    
+
+
     progressNote.textContent = `Processing completed: ${totalMedia} media posts processed`;
 
     
